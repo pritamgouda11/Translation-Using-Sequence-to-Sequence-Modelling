@@ -172,3 +172,115 @@ We'll load the data for the task, which comprises of a parallel corpus of Indian
 # Download the training and validation datasets
 !wget -O data.train.csv "https://docs.google.com/spreadsheets/d/1JpK9nOuZ2ctMrjNL-C0ghUQ4TesTrMER1-dTD_torAA/gviz/tq?tqx=out:csv&sheet=data.train.csv"
 !wget -O data.valid.csv "https://docs.google.com/spreadsheets/d/1cKC0WpWpIQJkaqnFb7Ou7d0syFDsj6eEW7bM7GH3u2k/gviz/tq?tqx=out:csv&sheet=data.valid.csv"
+def read_dataframe(ds_type):
+    """ Loads a dataframe based on the given partition type.
+
+    Args:
+        ds_type (str): Dataset type: train (train) or validation (valid)
+
+    Returns:
+        pd.DataFrame: Pandas Dataframe for the specified partition.
+    """
+
+    df = pd.read_csv(f"data.{ds_type}.csv", header=0)
+    df = df[~df.isna()]
+    df['Name'] = df['Name'].astype(str)
+    df['Translation'] = df['Translation'].astype(str)
+    return df
+
+# Load the training and validation datasets
+train_data      = read_dataframe("train")
+validation_data = read_dataframe("valid")
+
+print(f"Length of training data: {len(train_data)}\nLength of validation data: {len(validation_data)}")
+
+"""Here are some examples from the training dataset. Note that the dataset may be noisy so some examples may not be perfect:"""
+
+train_data.sample(n=5)
+
+#more info on our data
+print("about training data:")
+print(train_data.info())
+
+print("\n about validation data:")
+print(validation_data.info())
+
+def count_pairs(items):
+    counts = {}
+    for pair in zip(items, items[1:]):
+        counts[pair] = counts.get(pair, 0) + 1
+    return counts
+
+def combine(items, pair_to_combine, newt):
+    combined = []
+    i = 0
+    while i < len(items):
+        if i < len(items) - 1 and items[i] == pair_to_combine[0] and items[i+1] == pair_to_combine[1]:
+            combined.append(newt)
+            i += 2
+        else:
+            combined.append(items[i])
+            i += 1
+    return combined
+mergerules = {}
+namecol = train_data["Name"].to_list()
+transcol = train_data["Translation"].to_list()
+names=namecol
+iter1 =[]
+iter2=[]
+for name in names:
+    for x in name:
+        iter1.append(ord(x))
+for name in names:
+    iter2.append(list(name.encode('utf-8')))
+text = [item for sublist in names for item in sublist]
+tokens = [item for sublist in iter2 for item in sublist]
+vocab_size = 290
+merge_count = vocab_size - 256
+ids = list(tokens)
+for i in range(merge_count):
+    pair_stats = count_pairs(ids)
+    top_pair = max(pair_stats, key=pair_stats.get)
+    new_id = 256 + i
+    ids = combine(ids, top_pair, new_id)
+    mergerules[top_pair] = new_id
+def encode(text):
+  tokens = list(text.encode("utf-8"))
+  while len(tokens) >= 2:
+    stats = count_pairs(tokens)
+    pair = min(stats, key=lambda p: mergerules.get(p, float("inf")))
+    if pair not in mergerules:
+      break
+    idx = mergerules[pair]
+    tokens = combine(tokens, pair, idx)
+  return tokens
+
+def make_text(ids):
+    bits = b"".join(vocab[id] for id in ids)
+    text = bits.decode("utf-8", errors="ignore")
+    return text
+
+def pull_apart(word):
+    return [char for char in word]
+
+
+
+vocab = {index: bytes([index]) for index in range(256)}
+for (first, second), idx in mergerules.items():
+    vocab[idx] = vocab[first] + vocab[second]
+print(vocab[256])
+print(str(vocab[256].decode('utf-8',errors="replace")))
+
+for name in ["pritam", "gouda"]:
+    encoded = encode(name)
+    decoded = make_text(encoded)
+    assert(decoded == name)
+for name in namecol:
+    encoded = encode(name)
+    decoded = make_text(encoded)
+    assert(decoded == name)
+
+special_token = '\x04'
+encoded_special = encode(special_token)
+subset_example = tokens[:3]
+# END CODE
