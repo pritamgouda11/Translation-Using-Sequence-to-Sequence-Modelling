@@ -284,3 +284,184 @@ special_token = '\x04'
 encoded_special = encode(special_token)
 subset_example = tokens[:3]
 # END CODE
+class Tokenizer:
+    """ Represents the tokenizer for text data.
+        Provides methods to encode and decode strings (as instance or as a batch). """
+
+    def __init__(self,data):
+        """ Initializes a new tokenizer.
+
+            Any variables required in intermediate operations are declared here.
+            You will also need to define things like special tokens and other things here.
+
+            All variables declared in this function will be serialized
+                and deserialized when loading and saving the Tokenizer.
+            """
+
+        # BEGIN CODE : tokenizer.init
+
+        # ADD YOUR CODE HERE
+        self.vocab ={}
+        self.merges = {}
+        self.get_vocab={}
+        self.SOT_token = b'\x01'
+        self.EOT_token = b'\x04'
+        self.pad_token = b'\x00'
+        self.add_start = False
+        self.add_end =False
+        self.strip_special = False
+
+        # END CODE
+
+    @classmethod
+    def load(cls, path):
+        """ Loads a pre-trained tokenizer from the given directory.
+           This directory will have a tokenizer.pkl file that contains all the tokenizer variables.
+
+        Args:
+            path (str): Path to load the tokenizer from.
+        """
+        tokenizer_file = os.path.join(path, "tokenizer.pkl")
+
+        if not os.path.exists(path) or not os.path.exists(os.path.join(path, "tokenizer.pkl")):
+            raise ValueError(cls.load.__name__ + ": No tokenizer found at the specified directory")
+
+        with open(tokenizer_file, "rb") as ifile:
+            return pickle.load(ifile)
+
+    def save(self, path):
+        """ Saves a trained tokenizer to a given directory, inside a tokenizer.pkl file.
+
+        Args:
+            path (str): Directory to save the tokenizer in.
+        """
+
+        os.makedirs(path, exist_ok=True)
+        with open(os.path.join(path, "tokenizer.pkl"), 'wb') as ofile:
+            pickle.dump(self, ofile)
+
+    def get_stats(self,ids):
+        counts = {}
+        for pair in zip(ids, ids[1:]):
+            counts[pair] = counts.get(pair, 0) + 1
+        return counts
+
+    def merge(self,ids, pair, idx):
+        newids = []
+        i = 0
+        while i < len(ids):
+            if i < len(ids) - 1 and ids[i] == pair[0] and ids[i+1] == pair[1]:
+                newids.append(idx)
+                i += 2
+            else:
+                newids.append(ids[i])
+                i += 1
+        return newids
+
+    def train(self, data, vocab_size):
+        """ Trains a tokenizer to learn meaningful representations from input data.
+            In the end, learns a vocabulary of a fixed size over the given data.
+            Special tokens, if any, must not be counted towards this vocabulary.
+
+        Args:
+            data (list[str]): List of input strings from a text corpus.
+            vocab_size (int): Final desired size of the vocab to be learnt.
+        """
+
+        # BEGIN CODE : tokenizer.train
+        # ADD YOUR CODE HERE
+        names = data
+        i=[]
+        for name in names:
+            i.append(list(name.encode('utf-8')))
+        text = [item for sublist in names for item in sublist]
+        tokens = [item for sublist in i for item in sublist]
+
+        vocab_size = vocab_size
+        num_merges = vocab_size - 256
+        ids = list(tokens)
+        for i in range(num_merges):
+            stats = self.get_stats(ids)
+            pair = max(stats, key=stats.get)
+            idx = 256 + i
+            ids = self.merge(ids, pair, idx)
+            self.merges[pair] = idx
+        self.vocab = {idx: bytes([idx]) for idx in range(256)}
+        for (p0, p1), idx in self.merges.items():
+            self.vocab[idx] = self.vocab[p0] + self.vocab[p1]
+        # END CODE
+
+
+    def pad(self, tokens, length):
+        """ Pads a tokenized string to a specified length, for batch processing.
+
+        Args:
+            tokens (list[int]): Encoded token string to be padded.
+            length (int): Length of tokens to pad to.
+
+        Returns:
+            list[int]: Token string padded to desired length.
+        """
+
+        # BEGIN CODE : tokenizer.pad
+
+        # ADD YOUR CODE HERE
+        if len(tokens) >= length:
+            return tokens
+        pad_length = length - len(tokens)
+
+        start_padding =[]
+        end_padding =[]
+        padding = []
+        get_vocab = self.get_vocabulary()
+        if self.add_start and self.add_end:
+            padding = [get_vocab[self.pad_token]] *pad_length
+        else:
+            padding = [get_vocab[self.pad_token]] * pad_length
+
+        padded = tokens[:-1]+padding
+        end_padding.append(tokens[-1])
+        padded_tokens = start_padding + padded + end_padding
+        return padded_tokens
+
+        # END CODE
+
+    def unpad(self, tokens):
+        """ Removes padding from a token string.
+
+        Args:
+            tokens (list[int]): Encoded token string with padding.
+
+        Returns:
+            list[int]: Token string with padding removed.
+        """
+
+        # BEGIN CODE : tokenizer.unpad
+
+        # ADD YOUR CODE HERE
+        try:
+            if self.strip_special:
+                tokens = tokens[1:]
+                tokens = tokens[:-1]
+            first_pad_index = tokens.index(self.pad_token)
+            tokens = tokens[:first_pad_index]
+        except ValueError:
+            return tokens
+
+        # END CODE
+
+    def get_special_tokens(self):
+        """ Returns the associated special tokens.
+
+            Returns:
+                dict[str, int]: Mapping describing the special tokens, if any.
+                    This is a mapping between a string segment (token) and its associated id (token_id).
+        """
+
+        # BEGIN CODE : tokenizer.get_special_tokens
+
+        # ADD YOUR CODE HERE
+        get_vocab =self.get_vocabulary()
+        token_dict = {self.SOT_token : get_vocab[self.SOT_token],self.EOT_token : get_vocab[self.EOT_token]}
+        return token_dict
+        # END CODE
