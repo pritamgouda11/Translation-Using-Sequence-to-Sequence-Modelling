@@ -465,3 +465,112 @@ class Tokenizer:
         token_dict = {self.SOT_token : get_vocab[self.SOT_token],self.EOT_token : get_vocab[self.EOT_token]}
         return token_dict
         # END CODE
+def get_vocabulary(self):
+        """ Returns the learnt vocabulary post the training process.
+
+            Returns:
+                dict[str, int]: Mapping describing the vocabulary and special tokens, if any.
+                    This is a mapping between a string segment (token) and its associated id (token_id).
+        """
+
+        # BEGIN CODE : tokenizer.get_vocabulary
+
+        # ADD YOUR CODE HERE
+        self.get_vocab={}
+        for key, value in self.vocab.items():
+           self.get_vocab[value] = key
+
+        return self.get_vocab
+        # END CODE
+
+    def encode(self, string, add_start=True, add_end=True):
+        """ Encodes a string into a list of tokens.
+
+        Args:
+            string (str): Input string to be tokenized.
+            add_start (bool): If true, adds the start of sequence token.
+            add_end (bool): If true, adds the end of sequence token.
+        Returns:
+            list[int]: List of tokens (unpadded).
+        """
+
+        # BEGIN CODE : tokenizer.encode
+
+        # ADD YOUR CODE HERE
+        start =  self.SOT_token.decode('utf-8')
+        end = self.EOT_token.decode('utf-8')
+
+        if add_start:
+            string = start +string
+        if add_end:
+            string = string+end
+        tokens = list(string.encode("utf-8"))
+        while len(tokens) >= 2:
+            stats = self.get_stats(tokens)
+            pair = min(stats, key=lambda p: self.merges.get(p, float("inf")))
+            if pair not in self.merges:
+                break # nothing else can be merged
+            idx = self.merges[pair]
+            tokens = self.merge(tokens, pair, idx)
+        return tokens
+        # END CODE
+
+    def decode(self, tokens, strip_special=True):
+        """ Decodes a string from a list of tokens.
+            Undoes the tokenization, returning back the input string.
+
+        Args:
+            tokens (list[int]): List of encoded tokens to be decoded. No padding is assumed.
+            strip_special (bool): Whether to remove special tokens or not.
+
+        Returns:
+            str: Decoded string.
+        """
+
+        # BEGIN CODE : tokenizer.decode
+        if strip_special:
+            tokens = tokens[1:-1]
+        # ADD YOUR CODE HERE
+        tks = b"".join(self.vocab[idx] for idx in tokens)
+        text = tks.decode("utf-8", errors="replace")
+        return text
+        # END CODE
+
+
+    def batch_encode(self, batch, padding=None, add_start=True, add_end=True):
+        """Encodes multiple strings in a batch to list of tokens padded to a given size.
+
+        Args:
+            batch (list[str]): List of strings to be tokenized.
+            padding (int, optional): Optional, desired tokenized length. Outputs will be padded to fit this length.
+            add_start (bool): If true, adds the start of sequence token.
+            add_end (bool): If true, adds the end of sequence token.
+
+        Returns:
+            list[list[int]]: List of tokenized outputs, padded to the same length.
+        """
+        self.add_start = add_start
+        self.add_end =  add_end
+        batch_output = [ self.encode(string, add_start, add_end) for string in batch ]
+        if padding:
+            for i, tokens in enumerate(batch_output):
+                if len(tokens) < padding:
+                    batch_output[i] = self.pad(tokens, padding)
+        return batch_output
+
+    def batch_decode(self, batch, strip_special=True):
+        """ Decodes a batch of encoded tokens to normal strings.
+
+        Args:
+            batch (list[list[int]]): List of encoded token strings, optionally padded.
+            strip_special (bool): Whether to remove special tokens or not.
+
+        Returns:
+            list[str]: Decoded strings after padding is removed.
+        """
+        self.strip_special =strip_special
+        return [ self.decode(self.unpad(tokens), strip_special=strip_special) for tokens in batch ]
+
+## ==== END EVALUATION PORTION
+
+"""Now with the tokenizer class, initialize and train the tokenizers for processing the parallel corpus:"""
