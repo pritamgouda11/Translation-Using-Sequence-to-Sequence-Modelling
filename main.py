@@ -1039,3 +1039,844 @@ class Trainer:
                     json.dump(metadata, ofile, ensure_ascii=False, indent=2)
 
 ## ==== END EVALUATION PORTION
+"""
+
+```
+# This is formatted as code
+```
+
+To test that the trainer works, try training a simple MLP network:"""
+
+X_train = torch.rand((500, 2))                      # (N x 2)
+X_dev   = torch.rand((20 , 2))                      # (N x 2)
+
+Y_train = (X_train[:, 0] - X_train[:, 1])[:, None]  # (N x 1)
+Y_dev   = (X_dev  [:, 0] - X_dev  [:, 1])[:, None]  # (N x 1)
+
+dummy_train_dataset = TensorDataset(X_train, Y_train)
+dummy_val_dataset   = TensorDataset(X_dev  , Y_dev  )
+
+model = torch.nn.Sequential(
+    torch.nn.Linear(2, 4),
+    torch.nn.ReLU(),
+    torch.nn.Linear(4, 1)
+)
+
+loss_fn = torch.nn.MSELoss()
+optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+
+trainer = Trainer("mlp", model, loss_fn, optimizer)
+trainer.train(dummy_train_dataset, dummy_val_dataset, batch_size=10, save_steps=300)
+
+# Epoch 10 / 10: 100%
+#  500/500 [01:29<00:00,  5.17it/s, batch=50, loss=0.0714]
+# [>] epoch # 2, batch #50: loss: 0.31215855 | val_loss: 0.21661270
+# [>] epoch # 4, batch #50: loss: 0.18035822 | val_loss: 0.20917449
+# [>] epoch # 6, batch #50: loss: 0.12588143 | val_loss: 0.19619425
+# [>] epoch # 8, batch #50: loss: 0.18728378 | val_loss: 0.17713324
+# [>] epoch #10, batch #50: loss: 0.07140931 | val_loss: 0.15469030
+
+"""## Seq-2-Seq Modeling with RNNs
+
+In this section, you will implement an encoder-decoder network using RNNs, to learn a conditional language model for the task of translating the names to Hindi.
+
+You can use any type of RNN for this purpose: `RNN`, `GRU`, `LSTM`, etc. Consult the pytorch documentation for additional information.
+
+Additional tips for training:
+- Use regularization: Dropout, etc.
+- Use a suitable optimizer, such as Adam.
+- Format data accordingly before passing it to the trainer, using the helper functions.
+- Do you need to pad sequences when processing inputs as a batch?
+"""
+
+## ==== BEGIN EVALUATION PORTION
+
+class RNNEncoderDecoderLM(torch.nn.Module):
+    """ Implements an Encoder-Decoder network, using RNN units. """
+
+    # Feel free to add additional parameters to __init__
+    def __init__(self, src_vocab_size, tgt_vocab_size, embd_dims, hidden_size, num_layers=1, dropout=0.1):
+        """ Initializes the encoder-decoder network, implemented via RNNs.
+
+        Args:
+            src_vocab_size (int): Source vocabulary size.
+            tgt_vocab_size (int): Target vocabulary size.
+            embd_dims (int): Embedding dimensions.
+            hidden_size (int): Size/Dimensions for the hidden states.
+        """
+
+        super(RNNEncoderDecoderLM, self).__init__()
+
+        # Dummy parameter to track the model device. Do not modify.
+        self._dummy_param = torch.nn.Parameter(torch.Tensor(0), requires_grad=False)
+
+        # BEGIN CODE : enc-dec-rnn.init
+        # ADD YOUR CODE HERE
+        self.src_vocab_size = src_vocab_size
+        self.tgt_vocab_size = tgt_vocab_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.encoder_embedding = nn.Embedding(src_vocab_size,embd_dims)
+        self.decoder_embedding = nn.Embedding(tgt_vocab_size,embd_dims)
+        self.dropout = nn.Dropout(dropout)
+        self.encoder_rnn = nn.GRU(input_size=embd_dims,hidden_size=hidden_size,num_layers=num_layers,dropout=dropout,batch_first=True)
+        self.decoder_rnn = nn.GRU(input_size=embd_dims,hidden_size=hidden_size,num_layers=num_layers,dropout=dropout,batch_first=True)
+        self.fc = nn.Linear(hidden_size,tgt_vocab_size)
+        # END CODE
+
+    @property
+    def device(self):
+        """ Returns the device the model parameters are on. """
+        return self._dummy_param.device
+
+    def forward(self, inputs, decoder_inputs, decoder_hidden_state=None):
+        """ Performs a forward pass over the encoder-decoder network.
+
+            Accepts inputs for the encoder, inputs for the decoder, and hidden state for
+                the decoder to continue generation after the given input.
+
+        Args:
+            inputs (torch.Tensor): tensor of shape [batch_size?, max_seq_length]
+            decoder_inputs (torch.Tensor): tensor of shape [batch_size?, 1]
+            decoder_hidden_state (any): tensor to represent decoder hidden state from time step T-1.
+
+        Returns:
+            tuple[torch.Tensor, any]: output from the decoder, and associated hidden state for the next step.
+            Decoder outputs should be log probabilities over the target vocabulary.
+        """
+
+        # BEGIN CODE : enc-dec-rnn.forward
+
+        # ADD YOUR CODE HERE
+
+        if decoder_hidden_state is None:
+            src_embedding = self.dropout(self.encoder_embedding(inputs))
+            encoder_outputs, encoder_hidden = self.encoder_rnn(src_embedding)
+            encoder_state =  encoder_hidden
+            decoder_hidden_state = encoder_state
+        tgt_embedding = self.dropout(self.decoder_embedding(decoder_inputs))
+        decoder_outputs, hidden_state = self.decoder_rnn(tgt_embedding,decoder_hidden_state)
+        outputs =  self.fc(decoder_outputs)
+        out_probs = nn.functional.log_softmax(outputs,dim=-1)
+        # print("ip", inputs.shape)
+        # print("decoder ip", decoder_inputs.shape)
+        # print("decoder hidden", decoder_hidden_state.shape)
+
+        return (out_probs,hidden_state)
+        # END CODE
+
+    def log_probability(self, seq_x, seq_y):
+        """ Compute the conditional log probability of seq_y given seq_x, i.e., log P(seq_y | seq_x).
+
+        Args:
+            seq_x (torch.tensor): Input sequence of tokens.
+            seq_y (torch.tensor): Output sequence of tokens.
+
+        Returns:
+            float: Log probability of seq_y given seq_x
+        """
+
+        # BEGIN CODE : enc-dec-rnn.log_probability
+
+        # ADD YOUR CODE HERE
+        with torch.no_grad():
+            encoder_hidden, encoder_cell = None, None
+            encoder_outputs, encoder_hidden = self.encoder(seq_x)
+            decoder_hidden_state = encoder_hidden
+            # decoder_input = seq_y[:, 0].unsqueeze(1)
+            log_probability = 0.0
+            for i in range(seq_y.size(1)):
+                decoder_input = seq_y[:, i:i+1]
+                decoder_output, decoder_hidden_state = self.forward(seq_x, decoder_input, decoder_hidden_state)
+                output_probs = torch.log_softmax(self.fc(decoder_output), dim=-1)
+                true_next_token_probs = output_probs[range(output_probs.size(0)), seq_y[:, i]]
+                # log_probability += actual_next_tokens_log_probs.sum()
+                log_probability += true_next_token_probs
+            return log_probability.sum().item()
+        # END CODE
+
+## ==== END EVALUATION PORTION
+
+"""To train the above model, implement for training and evaluation steps in the `RNNEncoderDecoderTrainer` class below:"""
+
+## ==== BEGIN EVALUATION PORTION
+
+class RNNEncoderDecoderTrainer(Trainer):
+    """ Performs model training for RNN-based Encoder-Decoder models. """
+
+    def __init__(self, directory, model, criterion, optimizer):
+        """ Initializes the trainer.
+
+        Args:
+            directory (str): Directory to save checkpoints and the model data in.
+            model (torch.nn.Module): Torch model to train.
+            criterion (torch.nn.Function): Loss Criterion.
+            optimizer (torch.optim.Optimizer): Optimizer to use.
+        """
+
+        super(RNNEncoderDecoderTrainer, self).__init__(directory, model, criterion, optimizer)
+
+    @staticmethod
+    def make_dataloader(dataset, shuffle_data=True, batch_size=8, collate_fn=None):
+        """ Create a dataloader for a torch Dataset.
+
+        Args:
+            dataset (torch.utils.data.Dataset): Dataset to process.
+            shuffle_data (bool, optional): If true, shuffles the data. Defaults to True.
+            batch_size (int, optional): Number of items per batch. Defaults to 8.
+            collate_fn (function, optional): Function to collate instances in a batch.
+
+        Returns:
+            torch.utils.data.DataLoader: Dataloader over the given data, post processing.
+        """
+
+        # BEGIN CODE : rnn-enc-dec-trainer.make_dataloader
+
+        # ADD YOUR CODE HERE
+        return DataLoader(
+            dataset=dataset,
+            shuffle=shuffle_data,
+            batch_size=batch_size,
+            collate_fn=collate_fn
+            )
+        # END CODE
+
+    def train_step(self, x_batch, y_batch):
+        """ Performs a step of training, on the training batch.
+
+        Args:
+            x_batch (torch.Tensor): Input batch tensor, of shape [batch_size, *instance_shape].
+              For RNNs this is [batch_size, src_padding] or a torch.nn.utils.rnn.PackedSequence of varying lengths per batch (depends on padding).
+            y_batch (torch.Tensor): Output batch tensor, of shape [batch_size, *instance_shape].
+              For RNNs this is [batch_size, tgt_padding] or a torch.nn.utils.rnn.PackedSequence of varying lengths per batch (depends on padding).
+
+        Returns:
+            float: Training loss with the current model, on this batch.
+        """
+
+        # BEGIN CODE : rnn-enc-dec-trainer.train_step
+
+        # ADD YOUR CODE HERE
+        self.model.train()
+        self.optimizer.zero_grad()
+        x_batch = x_batch.to(self.device)
+        y_batch = y_batch.to(self.device)
+        decoder_hidden_state = None
+        loss = 0 #fwd
+        for i in range(y_batch.shape[1] - 1):
+            decoder_input = y_batch[:, i:i + 1]
+            decoder_output_probs, decoder_hidden_state = self.model(x_batch, decoder_input, decoder_hidden_state)
+            target_next_token = y_batch[:, i + 1:i + 2]
+            step_loss = self.criterion(decoder_output_probs.squeeze(dim=1), target_next_token.squeeze(dim=1))
+            loss += step_loss
+        loss /= y_batch.shape[1]
+        loss.backward() #bkw
+        self.optimizer.step()
+        return loss.item()
+        # END CODE
+
+    def eval_step(self, validation_dataloader):
+        """ Perfoms an evaluation step, on the validation dataloader.
+
+        Args:
+            validation_dataloader (torch.utils.data.DataLoader): Dataloader for the validation dataset.
+
+        Returns:
+            float: Validation loss with the current model checkpoint.
+        """
+
+        # BEGIN CODE : rnn-enc-dec-trainer.eval_step
+
+        # ADD YOUR CODE HERE
+        self.model.eval()
+        total_loss = 0.0
+        totalbatch = 0
+        with torch.no_grad():
+            for x_batch, y_batch in validation_dataloader:
+                x_batch = x_batch.to(self.device)
+                y_batch = y_batch.to(self.device)
+                decoder_hidden_state = None
+                ls = 0 #fwd
+                for i in range(y_batch.shape[1] - 1):
+                    decoder_input = y_batch[:, i:i + 1]
+                    decoder_output_probs, decoder_hidden_state = self.model(x_batch, decoder_input, decoder_hidden_state)
+                    target_next_token = y_batch[:, i + 1:i + 2]
+                    step_loss = self.criterion(decoder_output_probs.squeeze(dim=1), target_next_token.squeeze(dim=1))
+                    ls += step_loss
+                total_loss += ls.item()
+                totalbatch += 1
+        valloss = total_loss / y_batch.shape[1] #val vala
+        return valloss
+        # END CODE
+
+## ==== END EVALUATION PORTION
+
+## == BEGIN EVALUATION PORTION
+
+# Edit the hyperparameters below to your desired values.
+
+# BEGIN CODE : rnn-enc-dec.params
+
+# Add parameters related to the model here.
+rnn_enc_dec_params = {
+    'src_vocab_size': 1000,
+    'tgt_vocab_size': 1000,
+    'embd_dims'     : 256,
+    'hidden_size'   : 512,
+    'dropout'       : 0.1,
+    'num_layers'    : 2
+}
+
+# Add parameters related to the dataset processing here.
+rnn_enc_dec_data_params = dict(
+    src_padding=20,
+    tgt_padding=20,
+)
+
+# Add parameters related to training here.
+rnn_enc_dec_training_params = dict(
+    num_epochs=100,
+    batch_size=512,
+    shuffle=True,
+    save_steps=100,
+    eval_steps=50
+)
+
+# END CODE
+
+# Do not forget to set a deterministic seed.
+torch.manual_seed(42)
+
+model = RNNEncoderDecoderLM(**rnn_enc_dec_params)
+
+# BEGIN CODE : rnn-enc-dec.train
+
+# ADD YOUR CODE HERE
+# optimizer = torch.optim.Adam(model.parameters(),lr=0.01)
+optimizer = torch.optim.Adam(model.parameters(),lr=0.001)
+criterion = nn.CrossEntropyLoss()
+
+# END CODE
+
+trainer = RNNEncoderDecoderTrainer(
+    os.path.join(DIRECTORY_NAME, "rnn.enc-dec"),
+    model, criterion, optimizer
+)
+
+## == END EVALUATION PORTION
+
+# Please do not change anything in the following cell.
+
+train_dataset      = TokenizerDataset(train_data     , src_tokenizer, tgt_tokenizer, **rnn_enc_dec_data_params)
+validation_dataset = TokenizerDataset(validation_data, src_tokenizer, tgt_tokenizer, **rnn_enc_dec_data_params)
+
+rnn_enc_dec_train_data = dict(
+    train_dataset=train_dataset,
+    validation_dataset=validation_dataset,
+    collate_fn=train_dataset.collate
+)
+
+# Resume training from the last checkpoint, if interrupted midway, else begins training from scratch.
+# trainer.resume()
+
+# Train as per specified training parameters.
+trainer.train(**rnn_enc_dec_train_data, **rnn_enc_dec_training_params)
+print("traininf is done")
+
+# Please do not change anything in the following cell.
+
+# Save the final model, with additional metadata.
+trainer.save(metadata={
+    'model'   : rnn_enc_dec_params,
+    'data'    : rnn_enc_dec_data_params,
+    'training': rnn_enc_dec_training_params
+})
+
+"""To validate training, look at sample translations for different examples, and probabilities assigned to different outputs.
+
+Extensive evaluation and comparison against other approaches will be carried out later.
+"""
+
+import numpy as np
+def rnn_greedy_generate(model, seq_x, src_tokenizer, tgt_tokenizer, max_length):
+    """ Given a source string, translate it to the target language using the trained model.
+        This function should perform greedy sampling to generate the results.
+
+    Args:
+        model (nn.Module): RNN Type Encoder-Decoder Model
+        seq_x (str): Input string to translate.
+        src_tokenizer (Tokenizer): Source language tokenizer.
+        tgt_tokenizer (Tokenizer): Target language tokenizer.
+        max_length (int): Maximum length of the target sequence to decode.
+
+    Returns:
+        str: Generated string for the given input in the target language.
+    """
+
+    # BEGIN CODE : enc-dec-rnn.greedy_generate
+
+    # ADD YOUR CODE HERE
+    beforetok = src_tokenizer.encode(seq_x)
+    # print("before", seq_x)
+    beforetok = src_tokenizer.pad(beforetok,max_length)
+    beforetens = torch.tensor([beforetok],device='cuda')
+    start = tgt_tokenizer.SOT_token
+    pad = tgt_tokenizer.pad_token
+    endt = tgt_tokenizer.EOT_token
+    special_tgt =tgt_tokenizer.get_special_tokens()
+    tgt_vocab = tgt_tokenizer.get_vocabulary()
+    padid = tgt_vocab[pad]
+    endid = special_tgt[endt]
+    with torch.no_grad():
+        final = []
+        decoder_hidden_state = None
+        decoder_input = torch.tensor([[special_tgt[start]]],device='cuda')
+        final.append(decoder_input.item())
+        for _ in range(max_length):
+            decoder_output, decoder_hidden_state = model(beforetens, decoder_input, decoder_hidden_state)
+            output_probs = decoder_output
+            predicted_token_index = torch.argmax(output_probs, dim=-1)
+            final.append(predicted_token_index.item())
+            if predicted_token_index ==endid: break
+            decoder_input = torch.tensor([[predicted_token_index]],device='cuda')
+        idx = final.index(padid)
+        final = final[:idx+1]
+        final[-1] =4
+        decoded_string = tgt_tokenizer.decode(final)
+        # print("decoded:", decoded_string)
+        # print("special tockens:", special_tgt)
+    return decoded_string
+    # END CODE
+
+# Please do not change anything in the following cell.
+
+for _, row in train_data.sample(n=5, random_state=42).iterrows():
+    y_pred = rnn_greedy_generate(
+        model, row['Name'], src_tokenizer, tgt_tokenizer,
+        max_length = rnn_enc_dec_data_params['tgt_padding']
+    )
+
+    print("Name                      :", row['Name'])
+    print("Translation (Expected)    :", row['Translation'])
+    print("Translation (Model)       :", y_pred)
+
+    print()
+
+# Please do not change anything in the following cell.
+
+for _, row in validation_data.sample(n=5, random_state=42).iterrows():
+    y_pred = rnn_greedy_generate(
+        model, row['Name'], src_tokenizer, tgt_tokenizer,
+        max_length = rnn_enc_dec_data_params['tgt_padding']
+    )
+
+    print("Name                      :", row['Name'])
+    print("Translation (Expected)    :", row['Translation'])
+    print("Translation (Model)       :", y_pred)
+
+    print()
+
+pritamvar = tgt_tokenizer.encode('प्रीतम')
+print(pritamvar)
+
+targetpritam = tgt_tokenizer.decode(pritamvar)
+targetpritam
+
+# Please do not change anything in the following cell.
+
+output_data = []
+for _, row in validation_data.iterrows():
+    y_pred = rnn_greedy_generate(
+        model, row['Name'], src_tokenizer, tgt_tokenizer,
+        max_length = rnn_enc_dec_data_params['tgt_padding']
+    )
+    output_data.append({ 'Name': row['Name'], 'Translation': y_pred })
+
+pd.DataFrame.from_records(output_data).to_csv(
+    os.path.join(DIRECTORY_NAME, "rnn.enc-dec", "outputs.csv"), index=False
+)
+
+greedypritam = rnn_greedy_generate(
+        model, 'pritam', src_tokenizer, tgt_tokenizer,
+        max_length = rnn_enc_dec_data_params['tgt_padding']
+    )
+greedypritam
+
+# Please do not change anything in the following cell.
+
+# Release resources
+if 'trainer' in globals():
+    del trainer
+
+if 'model' in globals():
+    del model
+
+sync_vram()
+
+"""## Seq-2-Seq Modeling with RNN + Attention
+
+In this module, you'll augment the Encoder-Decoder architecture to utilize attention, by implementing an Attention module that attends over the representations / inputs from the encoder.
+
+Many approaches have been proposed in literature towards implementing attention. You are free to explore and use any implementation of your choice.
+
+Some popular approaches are desribed in the original [paper by Bahdanau et al., 2014 on NMT](https://arxiv.org/abs/1409.0473) and an [exploratory paper by Luong et al, 2015](https://arxiv.org/abs/1508.04025) which explores different effective approaches to attention, including global and local attention.
+"""
+
+## ==== BEGIN EVALUATION PORTION
+
+class AttentionModule(torch.nn.Module):
+    """ Implements an attention module """
+
+    # Feel free to add additional parameters to __init__
+    def __init__(self, input_size):
+        """ Initializes the attention module.
+            Feel free to declare any parameters as required. """
+
+        super(AttentionModule, self).__init__()
+
+        # BEGIN CODE : attn.init
+        # ADD YOUR CODE HERE
+        self.W = nn.Linear(input_size,input_size)
+        self.V = nn.Linear(input_size,1)
+        self.U = nn.Linear(input_size,input_size)
+        # END CODE
+
+    def forward(self, encoder_outputs, decoder_hidden_state):
+        """ Performs a forward pass over the module, computing attention scores for inputs.
+
+        Args:
+            encoder_outputs (torch.Tensor): Output representations from the encoder, of shape [batch_size?, src_seq_len, output_dim].
+            decoder_hidden_state (torch.Tensor): Hidden state from the decoder at current time step, of appropriate shape as per RNN unit (with optional batch dim).
+
+        Returns:
+            torch.Tensor: Attentions scores for given inputs, of shape [batch_size?, 1, src_seq_len]
+        """
+
+        # BEGIN CODE : attn.forward
+
+        # ADD YOUR CODE HERE
+        decoder_hidden_state = decoder_hidden_state.permute(1,0,2)
+        maxl = encoder_outputs.shape[1]
+        decoder_hidden_state = decoder_hidden_state.repeat(1,maxl,1)
+        attnscr = self.V(torch.tanh(self.U(decoder_hidden_state)+self.W(encoder_outputs)))
+        attnscr = attnscr.permute(0,2,1)
+        attn = torch.nn.functional.softmax(attnscr, dim=1)
+        return attn
+        # END CODE
+
+## ==== END EVALUATION PORTION
+
+## ==== BEGIN EVALUATION PORTION
+
+class RNNEncoderDecoderLMWithAttention(torch.nn.Module):
+    """ Implements an Encoder-Decoder network, using RNN units, augmented with attention. """
+
+    # Feel free to add additional parameters to __init__
+    def __init__(self,src_vocab_size, tgt_vocab_size, embd_dims, hidden_size, num_layers=1, dropout=0.1):
+        """ Initializes the encoder-decoder network, implemented via RNNs.
+
+        Args:
+            src_vocab_size (int): Source vocabulary size.
+            tgt_vocab_size (int): Target vocabulary size.
+            embd_dims (int): Embedding dimensions.
+            hidden_size (int): Size/Dimensions for the hidden states.
+        """
+
+        super(RNNEncoderDecoderLMWithAttention, self).__init__()
+
+        # Dummy parameter to track the model device. Do not modify.
+        self._dummy_param = torch.nn.Parameter(torch.Tensor(0), requires_grad=False)
+
+        # BEGIN CODE : enc-dec-rnn-attn.init
+
+        # ADD YOUR CODE HERE
+        self.src_vocab_size = src_vocab_size
+        self.tgt_vocab_size = tgt_vocab_size
+        self.embd_dims = embd_dims
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.dropout = dropout
+        self.encoder_embedding = nn.Embedding(src_vocab_size,embd_dims)
+        self.decoder_embedding = nn.Embedding(tgt_vocab_size,embd_dims)
+        self.dropout = nn.Dropout(dropout)
+        self.encoder_rnn = nn.GRU(input_size=embd_dims,hidden_size=hidden_size,num_layers=num_layers,batch_first=True)
+        self.decoder_rnn = nn.GRU(input_size = hidden_size+embd_dims,hidden_size=hidden_size,num_layers=num_layers,batch_first=True)
+        self.attention = AttentionModule(hidden_size)
+        self.fc = nn.Linear(hidden_size,tgt_vocab_size)
+        # END CODE
+
+    @property
+    def device(self):
+        return self._dummy_param.device
+
+    def log_probability(self, seq_x, seq_y):
+        """ Compute the conditional log probability of seq_y given seq_x, i.e., log P(seq_y | seq_x).
+
+        Args:
+            seq_x (torch.tensor): Input sequence of tokens, of shape [src_seq_len] (no batch dim)
+            seq_y (torch.tensor): Output sequence of tokens, of shape [tgt_seq_len] (no batch dim)
+
+        Returns:
+            float: Log probability of generating sequence y, given sequence x.
+        """
+
+        # BEGIN CODE : enc-dec-rnn-attn.probability
+
+        # ADD YOUR CODE HERE
+        # src_emb = self.dropout(self.src_embedding(seq_x.unsqueeze(0)))
+        # tgt_emb = self.dropout(self.tgt_embedding(seq_y.unsqueeze(0)))
+        logprobab = 0.0 #fwd
+        encoder_outputs, encoder_hidden = self.encoder_rnn(self.src_embedding(seq_x.unsqueeze(0)))
+        decoder_input = torch.tensor([[0]])
+        decoder_hidden_state=None
+        for y in seq_y:
+            output, decoder_hidden = self.decoder_rnn(torch.cat([self.tgt_embedding(decoder_input), encoder_hidden], dim=1), decoder_hidden_state)
+            true_token_prob = output[0, y].log()
+            logprobab += true_token_prob
+            decoder_input = y.unsqueeze(0).unsqueeze(0)
+        return logprobab.item()
+        # END CODE
+
+    def attentions(self, seq_x, terminate_token, max_length):
+        """ Obtain attention over a sequence for decoding to the target language.
+
+        Args:
+            seq_x (torch.tensor): Tensor representing the source sequence, of shape [src_seq_len] (no batch dim)
+            terminate_token (int): Token to use as EOS, to stop generating outputs.
+            max_length (int): Maximum length to use to terminate the sampling.
+
+        Returns:
+            tuple[torch.tensor, torch.tensor]:
+                A tuple of two tensors: the attentions over individual output tokens ([tgt_seq_len, src_seq_len])
+                and the best output tokens ([tgt_seq_len]) per sequence step, based on greedy sampling.
+        """
+
+        # BEGIN CODE : rnn-enc-dec-attn.attentions
+
+        # ADD YOUR CODE HERE
+        seq_x = seq_x.unsqueeze(0)
+        decoder_inputs = torch.tensor([[1]]).to(self.device)
+        decoder_hidden_state = None
+        all_attentions = []
+        best_output_tokens = []
+        for _ in range(max_length):
+            output, decoder_hidden_state, attn_weights = self.forward(seq_x, decoder_inputs, decoder_hidden_state, output_attention=True)
+            all_attentions.append(attn_weights.squeeze(1))
+            print(output)
+            best_token = output.argmax(dim=1).item()
+            best_output_tokens.append(best_token)
+            if best_token == terminate_token: break
+            decoder_inputs = torch.tensor([[best_token]]).to(self.device)
+            # output = self.fc_out(decoder_output)
+            # output_token = output.argmax(-1).item()
+        attn = torch.stack(all_attentions).to(self.device)
+        best_pred = torch.tensor(best_output_tokens).to(self.device)
+        return (attn,best_pred )
+        # END CODE
+
+    def forward(self, inputs, decoder_inputs=None, decoder_hidden_state=None, output_attention=False):
+        """ Performs a forward pass over the encoder-decoder network.
+
+            Accepts inputs for the encoder, inputs for the decoder, and hidden state for
+                the decoder to continue generation after the given input.
+
+        Args:
+            inputs (torch.Tensor): tensor of shape [batch_size?, src_seq_len]
+            decoder_inputs (torch.Tensor): Decoder inputs, as tensor of shape [batch_size?, 1]
+            decoder_hidden_state (any): tensor to represent decoder hidden state from time step T-1.
+            output_attention (bool): If true, this function should also return the
+                associated attention weights for the time step, of shape [batch_size?, 1, src_seq_len].
+
+        Returns:
+            tuple[torch.Tensor, any]: output from the decoder, and associated hidden state for the next step.
+
+            Decoder outputs should be log probabilities over the target vocabulary.
+
+        Example:
+        >>> model = RNNEncoderDecoderWithAttention(*args, **kwargs)
+        >>> output, hidden = model(..., output_attention=False)
+        >>> output, hidden, attn_weights = model(..., output_attention=True)
+        """
+
+        # BEGIN CODE : enc-dec-rnn-attn.forward
+        # ADD YOUR CODE HERE
+        batch_size = inputs.shape[0]
+        if decoder_hidden_state is None:
+            decoder_hidden_state = torch.zeros(1,batch_size,self.hidden_size).to(self.device)
+        src_embedding = self.dropout(self.encoder_embedding(inputs))
+        encoder_output,encoder_hidden = self.encoder_rnn(src_embedding)
+        attn = self.attention(encoder_output,decoder_hidden_state)
+        context = torch.bmm(attn,encoder_output)
+        tgt_embedding = self.dropout(self.decoder_embedding(decoder_inputs))
+        tgt_embedding = torch.cat((tgt_embedding,context),dim=2)
+        decoder_outputs, hidden_state = self.decoder_rnn(tgt_embedding,decoder_hidden_state)
+        outputs = self.fc(decoder_outputs)
+        out_probs = nn.functional.log_softmax(outputs,dim=-1)
+        if output_attention:
+          print("attention wgt:", attn)
+          return (out_probs,hidden_state,attn)
+        else:  return (out_probs,hidden_state)
+        # END CODE
+
+## ==== END EVALUATION PORTION
+
+## == BEGIN EVALUATION PORTION
+
+# Edit the hyperparameters below to your desired values.
+
+# BEGIN CODE : rnn-enc-dec-attn.params
+
+# Add parameters related to the model here.
+rnn_enc_dec_attn_params = {
+    'src_vocab_size': 1000,
+    'tgt_vocab_size': 1000,
+    'embd_dims'     : 256,
+    'hidden_size'   : 512,
+    'dropout'       : 0.1,
+    'num_layers'    : 1
+}
+
+# Add parameters related to the dataset processing here.
+rnn_enc_dec_attn_data_params = dict(
+    src_padding=20,
+    tgt_padding=20,
+)
+
+# Add parameters related to training here.
+rnn_enc_dec_attn_training_params = dict(
+    num_epochs=100,
+    batch_size=512,
+    shuffle=True,
+    save_steps=100,
+    eval_steps=50
+)
+
+# END CODE
+
+# Do not forget to set a deterministic seed.
+torch.manual_seed(42)
+
+model = RNNEncoderDecoderLMWithAttention(**rnn_enc_dec_attn_params)
+
+# BEGIN CODE : rnn-enc-dec-attn.train
+
+# ADD YOUR CODE HERE
+optimizer = torch.optim.Adam(model.parameters(),lr=0.001)
+criterion = nn.CrossEntropyLoss()
+
+
+# END CODE
+
+trainer = RNNEncoderDecoderTrainer(
+    os.path.join(DIRECTORY_NAME, "rnn.enc-dec.attn"),
+    model, criterion, optimizer
+)
+## == END EVALUATION PORTION
+
+# Please do not change anything in the following cell.
+
+train_dataset      = TokenizerDataset(train_data     , src_tokenizer, tgt_tokenizer, **rnn_enc_dec_attn_data_params)
+validation_dataset = TokenizerDataset(validation_data, src_tokenizer, tgt_tokenizer, **rnn_enc_dec_attn_data_params)
+
+rnn_enc_dec_attn_train_data = dict(
+    train_dataset=train_dataset,
+    validation_dataset=validation_dataset,
+    collate_fn=train_dataset.collate
+)
+
+# Resume training from the last checkpoint, if interrupted midway, otherwise starts from scratch.
+# trainer.resume()
+
+# Train as per specified training parameters.
+trainer.train(**rnn_enc_dec_attn_train_data, **rnn_enc_dec_attn_training_params)
+print('training done')
+
+# Please do not change anything in the following cell.
+
+# Save the final model, with additional metadata.
+trainer.save(metadata={
+    'model'   : rnn_enc_dec_attn_params,
+    'data'    : rnn_enc_dec_attn_data_params,
+    'training': rnn_enc_dec_attn_training_params
+})
+
+"""We can validate the model using a few simple tests as below:"""
+
+# Please do not change anything in the following cell.
+
+for _, row in train_data.sample(n=5, random_state=42).iterrows():
+    y_pred = rnn_greedy_generate(
+        model, row['Name'], src_tokenizer, tgt_tokenizer,
+        max_length = rnn_enc_dec_data_params['tgt_padding']
+    )
+
+    print("Name                      :", row['Name'])
+    print("Translation (Expected)    :", row['Translation'])
+    print("Translation (Model)       :", y_pred)
+
+    print()
+
+# Please do not change anything in the following cell.
+
+for _, row in validation_data.sample(n=5, random_state=42).iterrows():
+    y_pred = rnn_greedy_generate(
+        model, row['Name'], src_tokenizer, tgt_tokenizer,
+        max_length = rnn_enc_dec_data_params['tgt_padding']
+    )
+
+    print("Name                      :", row['Name'])
+    print("Translation (Expected)    :", row['Translation'])
+    print("Translation (Model)       :", y_pred)
+
+    print()
+
+"""It may also be useful to look at attention maps for different examples:"""
+
+# Please do not change anything in the following cell.
+
+def visualize_attention(src_glyphs, tgt_glyphs, attention, axes):
+    axes.matshow(attention.numpy(), cmap='bone')
+
+    axes.set_xticks(numpy.arange(len(src_glyphs)), labels=src_glyphs)
+    axes.set_yticks(numpy.arange(len(tgt_glyphs)), labels=tgt_glyphs)
+
+# Please do not change anything in the following cell.
+
+pyplot.figure(figsize=(12, 10))
+
+src_id_to_token = inverse_vocabulary(src_tokenizer)
+tgt_id_to_token = inverse_vocabulary(tgt_tokenizer)
+
+with torch.no_grad():
+    for i, row in train_data.sample(n=4, random_state=69, ignore_index=True).iterrows():
+        src_tokens = torch.tensor(src_tokenizer.encode(row['Name']),device='cuda')
+        attentions, tgt_tokens = model.attentions(src_tokens, tgt_tokenizer.get_special_tokens()[tgt_tokenizer.EOT_token], max_length=50)
+        src_glyphs = apply_inverse_vocab(src_tokens.tolist(), src_id_to_token)
+        tgt_glyphs = apply_inverse_vocab(tgt_tokens.tolist(), tgt_id_to_token)
+        axes = pyplot.subplot(2, 2, i+1)
+        visualize_attention(src_glyphs, tgt_glyphs, attentions, axes)
+
+# Please do not change anything in the following cell.
+
+output_data = []
+for _, row in validation_data.iterrows():
+    y_pred = rnn_greedy_generate(
+        model, row['Name'], src_tokenizer, tgt_tokenizer,
+        max_length = rnn_enc_dec_data_params['tgt_padding']
+    )
+    output_data.append({ 'Name': row['Name'], 'Translation': y_pred })
+
+pd.DataFrame.from_records(output_data).to_csv(
+    os.path.join(DIRECTORY_NAME, "rnn.enc-dec.attn", "outputs.csv"), index=False
+)
+
+# Please do not change anything in the following cell.
+
+# Release resources
+if 'trainer' in globals():
+    del trainer
+
+if 'model' in globals():
+    del model
+
+sync_vram()
