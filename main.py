@@ -1880,3 +1880,401 @@ if 'model' in globals():
     del model
 
 sync_vram()
+
+"""## Evaluation
+
+In the last few modules, you have implemented different approaches towards transliteration of Indian names to Hindi. To assess how well different systems perform, it is useful to compute different metrics, which assess different properties:
+
+- **Accuracy**: From a parallel corpus, number of translations the model got exactly right. Higher the better. Note that this makes sense only for this task. and lacks granularity.
+- **Edit Distance**: Number of edits at the character level (insertions, deletions, substitutions) required to transform your model's outputs to a reference translation. Lower the better.
+- **Character Error Rate (CER)**: The rate at which your system/model makes mistakes at the character level. Lower the better.
+- **Token Error Rate (TER)**: The rate at which your system/model makes mistakes at the token level. Lower the better. Depending on your tokenizer implementation, could be the same as CER.
+- **BiLingual Evaluation Understudy (BLEU)**: Proposed by [Papineni et al., 2002](https://aclanthology.org/P02-1040/), BLEU is a metric that assess the quality of a translation against reference translations through assessing n-gram overlap. Higher the better.
+
+Since accents and half-letters exist as separate characters in the Unicode specification, and can change the interpretation of the output, metrics that operate at the character level will treat these separately.
+"""
+
+# Please do not change anything in the following cell.
+
+class Evaluator:
+    """ Class to handle all the logic concerning the evaluation of trained models.  """
+
+    def __init__(self, src_tokenizer, tgt_tokenizer) -> None:
+        """ Initializes the evaluator.
+
+        Args:
+            src_tokenizer (Tokenizer): Tokenizer for input strings in the source language.
+            tgt_tokenizer (Tokenizer): Tokenizer for output strings in the target language.
+        """
+
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.src_tokenizer = src_tokenizer
+        self.tgt_tokenizer = tgt_tokenizer
+        self.decoding_method = None
+
+    def set_decoding_method(self, decoding_method):
+        """ Sets the decoding method to use with models.
+                The evaluation function will use the set decoding method to generate outputs from the model.
+
+        Args:
+            decoding_method (function): Decoding method.
+                Must accept the model instance, the input string, and tokenizers as arguments.
+                Can accept additional arguments if required.
+        """
+
+        self.decoding_method = decoding_method
+
+    @staticmethod
+    def decompose(string):
+        """ Decomposes a string into a set of tokens.
+
+        Args:
+            string (str): String to decompose.
+
+        Returns:
+            list[str]: List of characters from the string.
+        """
+        return unicodedata.normalize('NFKD', string).encode('utf-8')
+
+    @staticmethod
+    def levenshtein_distance(string1, string2):
+        """ Computes the levensthein distance between two strings.
+
+        Args:
+            string1 (list[any]): Sequence A.
+            string2 (list[any]): Sequence B.
+
+        Returns:
+            tuple[int, int, int]: Number of insertions + deletions, substitutions and no-ops.
+        """
+
+        costs = [
+            [ 0 for j in range(len(string2)+1) ]
+            for i in range(len(string1)+1)
+        ]
+
+        # Prepare matrix of costs.
+        for i in range(len(string1)+1): costs[i][0] = i
+        for j in range(len(string2)+1): costs[0][j] = j
+        for i in range(1, len(string1)+1):
+            for j in range(1, len(string2)+1):
+                costs[i][j] = min(
+                    costs[i][j-1] + 1,
+                    costs[i-1][j] + 1,
+                    costs[i-1][j-1] + (0 if string1[i-1] == string2[j-1] else 1)
+                )
+
+        # Decode matrix in backward manner for actual operation counts.
+        c_ins_del, c_sub, c_noop = 0, 0, 0
+
+        i, j = len(string1), len(string2)
+        while i > 0 or j > 0:
+            if i > 0 and costs[i][j] == costs[i-1][j] + 1:
+                c_ins_del += 1
+                i -= 1
+            elif j > 0 and costs[i][j] == costs[i][j-1] + 1:
+                c_ins_del += 1
+                j -= 1
+            elif i > 0 and j > 0:
+                if string1[i-1] == string2[j-1]:
+                    c_noop += 1
+                else:
+                    c_sub += 1
+                i, j = i-1, j-1
+            else:
+                break
+
+        return c_ins_del, c_sub, c_noop
+
+    @staticmethod
+    def accuracy(y_true, y_pred):
+        """ Computes the accuracy of the predictions, against a reference set of predictions.
+
+        Args:
+            y_true (list[str]): Actual translations.
+            y_pred (list[str]): Generated translations.
+
+        Returns:
+            float: Accuracy score, between 0 and 1.
+        """
+        return sum(yi_true == yi_pred for yi_true, yi_pred in zip(y_true, y_pred)) / len(y_pred)
+
+    @classmethod
+    def char_error_rate(cls, y_true, y_pred):
+        """ Computes the character level error rate (CER) of the set of
+            predictions against the reference translations.
+
+        Args:
+            y_true (list[str]): Actual translations.
+            y_pred (list[str]): Generated translations.
+
+        Returns:
+            float: CER score, between 0 and 1. Lower the better.
+        """
+
+        cer_score = 0
+
+        for yi_true, yi_pred in zip(y_true, y_pred):
+            yi_true, yi_pred = cls.decompose(yi_true), cls.decompose(yi_pred)
+            c_ins_del, c_sub, c_noop = cls.levenshtein_distance(yi_true, yi_pred)
+            cer_score += (c_ins_del + c_sub) / (c_ins_del + c_sub + c_noop)
+
+        return cer_score / len(y_true)
+
+    def token_error_rate(self, y_true, y_pred):
+        """ Computes the token level error rate (TER) of the set of
+            predictions against the reference translations.
+
+        Args:
+            y_true (list[str]): Actual translations.
+            y_pred (list[str]): Generated translations.
+
+        Returns:
+            float: TER score, between 0 and 1. Lower the better.
+        """
+
+        ter_score = 0
+
+        for yi_true, yi_pred in zip(y_true, y_pred):
+            yi_true = self.tgt_tokenizer.encode(yi_true, add_start=False, add_end=False)
+            yi_pred = self.tgt_tokenizer.encode(yi_pred, add_start=False, add_end=False)
+            t_ins_del, t_sub, t_noop = self.levenshtein_distance(yi_true, yi_pred)
+            ter_score += (t_ins_del + t_sub) / (t_ins_del + t_sub + t_noop)
+
+        return ter_score / len(y_true)
+
+    @classmethod
+    def bleu_score(cls, y_true, y_pred):
+        """ Computes the average BLEU score of the set of predictions against the reference translations.
+
+            Uses default parameters and equal weights for all n-grams, with max N = 4. (Thus computes BLEU-4).
+            Uses a smoothing method for the case of missing n-grams.
+
+        Args:
+            y_true (list[str]): Actual translations.
+            y_pred (list[str]): Generated translations.
+
+        Returns:
+            float: BLEU-4 score, the higher the better.
+        """
+
+        y_true = [ [ cls.decompose(yi) ] for yi in y_true ]
+        y_pred = [ cls.decompose(yi) for yi in y_pred ]
+
+        smoothing = bleu_score.SmoothingFunction()
+
+        return bleu_score.corpus_bleu(
+            y_true, y_pred,
+            smoothing_function=smoothing.method1
+        )
+
+    def evaluate(self, model_path, data, reference_outputs, **decoding_kwargs):
+        """ Performs the evaluation of a specified model over given data.
+
+        Args:
+            model_path (str): Path to load the model from. Must have a model.pt file.
+            data (list[str]): List of input strings to translate.
+            reference_outputs (list[str]): List of output strings to use as reference.
+            decoding_kwargs (dict[str, any]): Additional arguments to forward to the decoding method.
+                This could be for instance, max_length for a greedy decoding method.
+
+        Raises:
+            ValueError: If the decoding method is not set apriori.
+        """
+
+        if self.decoding_method is None:
+            raise ValueError(f"{self.evaluate.__name__}: no decoding method is set, assign before use.")
+
+        # Load the model to the active device.
+        model = torch.load(os.path.join(model_path, 'model.pt'), map_location=self.device)
+
+        # Set model use parameters.
+        model.to(self.device)
+        model.eval()
+
+        # Generate outputs.
+        generated_outputs = []
+        with torch.no_grad():
+            for seq_x in data:
+                generated_outputs.append(self.decoding_method(
+                    model, seq_x, self.src_tokenizer,
+                    self.tgt_tokenizer, **decoding_kwargs
+                ))
+
+        accuracy_score = self.accuracy(reference_outputs, generated_outputs)
+        cer_score      = self.char_error_rate(reference_outputs, generated_outputs)
+        ter_score      = self.token_error_rate(reference_outputs, generated_outputs)
+        blue_score     = self.bleu_score(reference_outputs, generated_outputs)
+
+        print("EVALUATION:", ">", "accuracy:", f"{accuracy_score:.2%}")
+        print("EVALUATION:", ">", "CER     :", f"{cer_score:.2%}")
+        print("EVALUATION:", ">", "TER     :", f"{ter_score:.2%}")
+        print("EVALUATION:", ">", "BLEU    :", f"{blue_score:.4f}")
+        print()
+
+        # Free resources once evaluation is complete.
+        del model
+        sync_vram()
+
+# Please do not change anything in the following cell.
+
+evaluator = Evaluator(src_tokenizer, tgt_tokenizer)
+
+# Use greedy decoding for producing outputs.
+evaluator.set_decoding_method(rnn_greedy_generate)
+
+# Evaluate enc-dec-rnn
+print("EVALUATION:", "enc-dec-rnn")
+evaluator.evaluate(
+    os.path.join(DIRECTORY_NAME, "rnn.enc-dec"),
+    validation_data['Name'], validation_data['Translation'],
+    max_length = rnn_enc_dec_data_params['tgt_padding']
+)
+
+# Evaluate enc-dec-rnn-attn
+print("EVALUATION:", "enc-dec-rnn-attn")
+evaluator.evaluate(
+    os.path.join(DIRECTORY_NAME, "rnn.enc-dec.attn"),
+    validation_data['Name'], validation_data['Translation'],
+    max_length = rnn_enc_dec_attn_data_params['tgt_padding']
+)
+
+"""## (**Bonus**) Decoding Strategies
+
+A conditional language model aims to learn $P_\theta(y | x)$, that is, the probability of the target sequence being $y$ when the input sequence is $x$. This is modeled as $P_{\theta}(y | x) = \prod_{i=1}^{|y|} {P_\theta(y_i | x, y_{1:i-1})}$.
+
+For translation, our goal is to find the sequence that maximizes this conditional probability, i.e. $y^* = \arg \max_{y} P_\theta(y | x)$. $y^*$ is then the 'best' translation for the input sequence $x$. However, computing probabilities for all possible $y$ to find the maximizer is intractable. As a result, decoding strategies are employed to produce reasonable approximations of $y^*$.
+
+In the last module, you evaluated your models through different metrics, but the approach for generating outputs from the model was fixed to greedy decoding, where at each time step, the token to be produced is determined by $y_{i,greedy} := \arg \max_{y_i} P(y_i| x, y_{1:i-1})$. While this approach is fast, $P(y_{greedy}|x)$ may be much less than $P(y^*|x)$. Fortunately, better decoding strategies exist to produce better approximations, however at the cost of higher time complexity. Some of these are:
+
+- **Beam-Search Decoding**: At every time step, retains $k$ candidate token generations, which are decoded individually (each path is referred as a beam) to obtain $k$ successors per beam. For the next time step, the best $k$ candidates are retained such that conditional probability of the sequence generated so far is maximized. Has a complexity of $O(kV|y|)$, where $V$ is the size of the target vocabulary, and $|y|$ is the target sequence length. Using $k=1$ makes it equivalent to greedy decoding. Implementations also employ length penalties to not be biased towards larger target sequences.
+
+- **Viterbi Decoding**: A decoding technique based on the Viterbi algorithm, which is a dynamic programming algorithm that provides an efficient way of finding the "most likely state sequence in the maximum a posteriori probability sense of a process assumed to be a finite-state discrete-time Markov process". Works well under assumptions of a small target vocabulary size and conditional independence of feature vectors. The decoded sequence has the minimum error probability possible when compared to $y^*$, i.e., $P(y_{viterbi}|x) \sim P(y^* | x)$. Has a time complexity of $O(V^2|y|)$.
+
+In the next cell, you will implement any preferred decoding strategy of your choice, and compare performances of different decoding strategies.
+
+**Note**: This module is optional, and can be attempted for a bonus score. If you choose to attempt this module, please set the variable `ATTEMPTED_BONUS` (declared below) to `True`, as this will impact the evaluation of the bonus part.
+"""
+
+## ==== BEGIN EVALUATION PORTION
+
+# ADD YOUR CODE HERE
+# Set this variable to True if you choose to implement the function `rnn_better_generate` for the bonus module.
+# Regardless of your choice, please run this cell.
+ATTEMPTED_BONUS = True
+
+## ==== END EVALUATION PORTION
+
+print("EVALUATION:", "Attempted Bonus Module?", ATTEMPTED_BONUS)
+
+## ==== BEGIN EVALUATION PORTION
+
+# Feel free to add additional parameters to rnn_better_generate, such as k for Beam Search Decoding.
+def rnn_better_generate(model, seq_x, src_tokenizer, tgt_tokenizer, max_length, k=5, length_penalty_alpha=0.6):
+    """ Given a source string, translate it to the target language using the trained model.
+        This function should use a better decoding strategy than greedy decoding (see above) to generate the results.
+
+    Args:
+        model (nn.Module): RNN Type Encoder-Decoder Model
+        seq_x (str): Input string to translate.
+        src_tokenizer (Tokenizer): Source language tokenizer.
+        tgt_tokenizer (Tokenizer): Target language tokenizer.
+        max_length (int): Maximum length of the target sequence to decode.
+
+    Returns:
+        str: Generated string for the given input in the target language.
+    """
+
+    # BEGIN CODE : enc-dec-rnn.better_generate
+    # ADD YOUR CODE HERE
+    #beam
+    beforetoks = src_tokenizer.encode(seq_x)
+    beforetoks = src_tokenizer.pad(beforetoks,max_length)
+    beforetens = torch.tensor([beforetoks],device='cuda')
+    end = tgt_tokenizer.EOT_token
+    start = tgt_tokenizer.SOT_token
+    pad = tgt_tokenizer.pad_token
+    spctoks =tgt_tokenizer.get_special_tokens()
+    tgt_vocab = tgt_tokenizer.get_vocabulary()
+    endid = spctoks[end]
+    startid = spctoks[start]
+    padid = tgt_vocab[pad]
+    with torch.no_grad():
+        decoded_tokens = []
+        decoder_hidden_state = None
+        decoder_input = torch.tensor([[spctoks[start]]],device='cuda')
+        decoded_tokens.append(decoder_input.item())
+        beam = [([startid], 0)]
+        print(f"decoder input tensor: {decoder_input}")
+        for _ in range(max_length):
+            candidates = []
+            for prefix, score in beam:
+                if prefix[-1] == endid:
+                    candidates.append((prefix, score))
+                    continue
+                outputs,decoder_hidden_state = model(beforetens,decoder_input,decoder_hidden_state)
+                ops = outputs.view(-1).cpu().detach().numpy()
+                top_indices = np.argsort(ops)[-k:]
+                for index in top_indices:
+                    candidate_prefix = prefix + [index]
+                    candidate_score = score + ops[index]
+                    candidates.append((candidate_prefix, candidate_score))
+            beam = sorted(candidates, key=lambda x: x[1], reverse=True)[:k]
+            temp= beam[0][0]
+            decoder_input = torch.tensor([[temp[-1]]],device='cuda')
+        bestseq, bestsrc = beam[0]
+        idx = bestseq.index(padid)
+        bestseq = bestseq[:idx+1]
+        bestseq[-1] =4
+        op = tgt_tokenizer.decode(bestseq)
+        print("beam candidates:")
+        for i, (prefix, score) in enumerate(beam):
+            print(f"  candidate {i + 1}: {prefix}, score: {score}")
+        print(f"best seq: {bestseq}")
+        print(f"beam output: {op}")
+        return op
+
+
+    # END CODE
+
+## ==== END EVALUATION PORTION
+
+## ==== BEGIN EVALUATION PORTION
+
+# BEGIN CODE : decoding.init
+
+# Add parameter values for your decoding strategy here. Leave empty if unused.
+
+decoding_params = dict(
+    # ADD YOUR CODE HERE
+)
+
+## ==== END EVALUATION PORTION
+
+# Please do not change anything in the following cell.
+
+evaluator = Evaluator(src_tokenizer, tgt_tokenizer)
+
+# Use a different decoding for producing outputs.
+if ATTEMPTED_BONUS:
+    evaluator.set_decoding_method(rnn_better_generate)
+else:
+    evaluator.set_decoding_method(rnn_greedy_generate)
+
+# Evaluate enc-dec-rnn
+print("EVALUATION:", "enc-dec-rnn")
+evaluator.evaluate(
+    os.path.join(DIRECTORY_NAME, "rnn.enc-dec"),
+    validation_data['Name'], validation_data['Translation'],
+    max_length = rnn_enc_dec_data_params['tgt_padding'],
+    **decoding_params
+)
+
+# Evaluate enc-dec-rnn-attn
+print("EVALUATION:", "enc-dec-rnn-attn")
+evaluator.evaluate(
+    os.path.join(DIRECTORY_NAME, "rnn.enc-dec.attn"),
+    validation_data['Name'], validation_data['Translation'],
+    max_length = rnn_enc_dec_attn_data_params['tgt_padding'],
+    **decoding_params
+)
