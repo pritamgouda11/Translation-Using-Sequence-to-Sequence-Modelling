@@ -574,3 +574,468 @@ def get_vocabulary(self):
 ## ==== END EVALUATION PORTION
 
 """Now with the tokenizer class, initialize and train the tokenizers for processing the parallel corpus:"""
+# Initialize the tokenizers as per the desired strategy.
+# ADD YOUR CODE HERE
+src_tokenizer = Tokenizer(namecol)
+tgt_tokenizer = Tokenizer(transcol)
+
+# END CODE
+
+## ==== END EVALUATION PORTION
+
+## ==== BEGIN EVALUATION PORTION
+
+# Edit the hyperparameters below as desired.
+SRC_VOCAB_SIZE = 1000
+TGT_VOCAB_SIZE = 1000
+
+# BEGIN CODE : tokenizer.training
+
+# Train your tokenizer(s)
+# ADD YOUR CODE HERE
+src_tokenizer.train(namecol,SRC_VOCAB_SIZE)
+tgt_tokenizer.train(transcol,TGT_VOCAB_SIZE)
+print("source vocab length:",SRC_VOCAB_SIZE)
+print("target vocablength:",TGT_VOCAB_SIZE)
+# END CODE
+
+## ==== END EVALUATION PORTION
+
+# Please do not change anything in the following cell
+
+# Save the trained tokenizers
+src_tokenizer.save(os.path.join(DIRECTORY_NAME, "src_tokenizer"))
+tgt_tokenizer.save(os.path.join(DIRECTORY_NAME, "tgt_tokenizer"))
+
+# Please do not change anything in the following cell
+
+def render_glyph(token):
+    """ Renders a token, handling invalid bytes in a safe, error-proof manner. """
+
+    token = token.decode('utf-8', errors='replace') if isinstance(token, bytes) else token
+    return "".join([ c if unicodedata.category(c)[0] != "C" else f"\\u{ord(c):04x}" for c in token ])
+
+def inverse_vocabulary(tokenizer):
+    """ Generates an inverse vocabulary with rendered tokens.
+
+    Args:
+        tokenizer (Tokenizer): Tokenizer whose vocabulary must be used.
+    """
+
+    return { id: render_glyph(token) for token, id in tokenizer.get_vocabulary().items() }
+
+def apply_inverse_vocab(tokens, inv_vocab):
+    """ Decodes using the given inverse vocabulary.
+
+    Args:
+        tokens (list[int]): Tokens to process.
+        inv_vocab (dict[int, str]): Inverse vocabulary for mapping ids to tokens.
+
+    Returns:
+        list[str]: Mapped token glyphs.
+    """
+
+    return [ inv_vocab[id] for id in tokens ]
+
+"""We visualize a few outputs of the learnt tokenizers to assess their working:"""
+
+# Please do not change anything in the following cell
+
+src_id_to_token = inverse_vocabulary(src_tokenizer)
+
+for example in train_data['Name'].sample(n=5, random_state=20240227):
+    print("Name           :", example)
+    tokens = src_tokenizer.encode(example)
+    print("Tokens         :", tokens)
+    print("Tokens (glyphs):", apply_inverse_vocab(tokens, src_id_to_token))
+    print("Decoded        :", src_tokenizer.decode(tokens), end='\n\n')
+
+# Please do not change anything in the following cell
+
+tgt_id_to_token = inverse_vocabulary(tgt_tokenizer)
+
+for example in train_data['Translation'].sample(n=5, random_state=20240227):
+    print("Name           :", example)
+    tokens = tgt_tokenizer.encode(example)
+    print("Tokens         :", tokens)
+    print("Tokens (glyphs):", apply_inverse_vocab(tokens, tgt_id_to_token))
+    print("Decoded        :", tgt_tokenizer.decode(tokens), end='\n\n')
+
+tgt_id_to_token = inverse_vocabulary(tgt_tokenizer)
+
+for example in ['प्रीतम']:
+    print("Name           :", example)
+    tokens = tgt_tokenizer.encode(example)
+    print("Tokens         :", tokens)
+    print("Tokens (glyphs):", apply_inverse_vocab(tokens, tgt_id_to_token))
+    print("Decoded        :", tgt_tokenizer.decode(tokens), end='\n\n')
+
+# Please do not change anything in the following cell
+
+# Run some tests to ensure your tokenizer implementation works as intended.
+
+instances = train_data['Translation'].sample(n=5, random_state=20240227).tolist()
+try:
+    max_length =max(map(
+        lambda x: len(tgt_tokenizer.encode(x, add_start=False, add_end=False)),
+        instances
+    ))
+    # Batch encode all instances with 'max' padding':
+    tokenized_instances = tgt_tokenizer.batch_encode(
+        instances, padding=max_length, add_start=False, add_end=False
+    )
+
+    #print(tokenized_instances)
+    # Check if length of encoded strings is consistent with the expected length.
+    assert all(len(tok_str) == max_length for tok_str in tokenized_instances)
+
+except AssertionError:
+    print((
+        "[!] Your tokenizer does not encode strings correctly, "
+        "ensure you have implemented padding appropriately!"
+    ))
+
+try:
+
+    max_length = max(map(
+        lambda x: len(tgt_tokenizer.encode(x, add_start=True, add_end=True)),
+        instances
+    ))
+    # Batch encode all instances with 'max' padding':
+    tokenized_instances = tgt_tokenizer.batch_encode(
+        instances, padding=max_length, add_start=True, add_end=True
+    )
+    # Check if length of encoded strings is consistent with the expected length.
+    assert all(len(tok_str) == max_length for tok_str in tokenized_instances)
+    # Check if all strings start with the correct 'start' token.
+    assert all(tok_str[0] == tokenized_instances[0][0] for tok_str in tokenized_instances)
+
+    # Check if all strings end with the correct 'end' tokens.
+    end_i = [ i for i, seq in enumerate(tokenized_instances) if len(tgt_tokenizer.unpad(seq)) == max_length ]
+    pad_i = [ i for i, seq in enumerate(tokenized_instances) if len(tgt_tokenizer.unpad(seq)) <  max_length ]
+
+    assert all(
+        tokenized_instances[i][-1] == tokenized_instances[end_i[0]][-1]
+        for i in end_i
+    )
+    assert all(
+        tokenized_instances[i][-1] == tokenized_instances[pad_i[0]][-1]
+        for i in pad_i
+    )
+    pad_lengths = [ tokenized_instances[i].index(tokenized_instances[end_i[0]][-1]) for i in pad_i ]
+    assert all(
+        all(tok == tokenized_instances[pad_i[0]][-1] for tok in tokenized_instances[i][plen+1:])
+        for i, plen in zip(pad_i, pad_lengths)
+    )
+
+except AssertionError:
+    print((
+        "[!] Your tokenizer does not encode strings correctly, "
+        "ensure you have used start and end tokens appropriately!"
+    ))
+
+"""We now abstract away the tokenizer into a pytorch compatible TokenizedDataset that will handle the tokenization internally:"""
+
+# Please do not change anything in the following cell
+
+class TokenizerDataset(TensorDataset):
+    """ Abstraction of the tokenizer functions as a pytorch dataset. """
+
+    def __init__(self, data, src_tokenizer, tgt_tokenizer, src_padding=None, tgt_padding=None):
+        """ Initializes the dataset.
+
+        Args:
+            data: DataFrame of input and output strings.
+            src_tokenizer (Tokenizer): Tokenizer for the source language.
+            tgt_tokenizer (Tokenizer): Tokenizer for the target language.
+            src_padding (int, optional): Padding length for the source text. Defaults to None.
+            tgt_padding (int, optional): Padding length for the target text. Defaults to None.
+        """
+
+        self.data = data
+        self.src_tokenizer = src_tokenizer
+        self.tgt_tokenizer = tgt_tokenizer
+        self.src_padding = src_padding
+        self.tgt_padding = tgt_padding
+
+    def collate(self, batch):
+        """ Collates data instances into a batch of tokenized tensors.
+
+        Args:
+            batch (list[tuple]): List of x, y pairs.
+
+        Returns:
+            tuple[torch.Tensor|PackedSequence, torch.Tensor|PackedSequence]: pair of tokenized tensors.
+        """
+
+        x_batch = [ data[0] for data in batch ]
+        y_batch = [ data[1] for data in batch ]
+
+        x_batch = self.src_tokenizer.batch_encode(x_batch, self.src_padding)
+        y_batch = self.tgt_tokenizer.batch_encode(y_batch, self.tgt_padding)
+
+        if self.src_padding is None:
+            x_batch = torch.nn.utils.rnn.pack_sequence([ torch.tensor(tokens) for tokens in x_batch ], False)
+        else:
+            x_batch = torch.tensor(x_batch)
+
+        if self.tgt_padding is None:
+            y_batch = torch.nn.utils.rnn.pack_sequence([ torch.tensor(tokens) for tokens in y_batch ], False)
+        else:
+            y_batch = torch.tensor(y_batch)
+
+        return x_batch, y_batch
+
+    def __getitem__(self, index):
+        """ Returns the nth instance from the dataset.
+
+        Args:
+            index (int): Index of the instance to retrieve.
+
+        Returns:
+            tuple[str, str]: Untokenized instance pair.
+        """
+
+        return (
+            self.data['Name'][index],
+            self.data['Translation'][index]
+        )
+
+    def __len__(self):
+
+        """ Returns the length of the dataset.
+
+        Returns:
+            int: Length of the dataset.
+        """
+        return len(self.data)
+
+"""## Model-Agnostic Training
+
+Next, you'll implement a Trainer to train different models, since the data and tokenizer remains the same for all models.
+
+This trainer will receive the model, a loss function, an optimizer, a training and (optionally) a validation dataset and use these to train (and validate) the model.
+
+The trainer will also take care of handling checkpoints for training, which can be used to resume training across sessions.
+
+Derived classes can also be defined to handle different architectures, as to be done in the model-specific classes below.
+"""
+
+## ==== BEGIN EVALUATION PORTION
+
+class Trainer:
+    """ Performs model training in a model-agnostic manner.
+        Requires specifying the model instance, the loss criterion to optimize,
+          the optimizer to use and the directory to save data to.
+    """
+
+    def __init__(self, directory, model, criterion, optimizer):
+        """ Initializes the trainer.
+
+        Args:
+            directory (str): Directory to save checkpoints and the model data in.
+            model (torch.nn.Module): Torch model (must inherit `torch.nn.Module`) to train.
+            criterion (torch.nn.Function): Loss criterion, i.e., the loss function to optimize for training.
+            optimizer (torch.optim.Optimizer): Optimizer to use for training.
+        """
+
+        self.model            = model
+        self.optimizer        = optimizer
+        self.criterion        = criterion
+        self.directory        = directory
+        self.last_checkpoint  = 0
+        self.loss_history     = { 'train': [], 'valid': [] }
+        os.makedirs(self.directory, exist_ok=True)
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        print("architecture:")
+        print(self.model)
+        print("\ncriterion:")
+        print(self.criterion)
+        print("\noptimizer")
+        print(self.optimizer)
+
+    @staticmethod
+    def make_dataloader(dataset, shuffle_data=True, batch_size=64, collate_fn=None):
+        """ Create a dataloader for a torch Dataset.
+
+        Args:
+            dataset (torch.utils.data.Dataset): Dataset to process.
+            shuffle_data (bool, optional): If true, shuffles the data. Defaults to True.
+            batch_size (int, optional): Number of items per batch. Defaults to 8.
+            collate_fn (function, optional): Function to use for collating instances to a batch.
+
+        Returns:
+            torch.utils.data.DataLoader: Dataloader over the given data, post processing.
+        """
+
+        # BEGIN CODE : trainer.make_dataloader
+
+        # ADD YOUR CODE HERE
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle_data,
+            collate_fn=collate_fn
+            )
+        # END CODE
+
+    def train_step(self, x_batch, y_batch):
+        """ Performs a step of training, on the training batch.
+
+        Args:
+            x_batch (torch.Tensor): Input batch.
+            y_batch (torch.Tensor): Output batch.
+
+        Returns:
+            float: Training loss with the current model, on this batch.
+        """
+
+        # BEGIN CODE : trainer.train_step
+
+        # ADD YOUR CODE HERE
+        self.model.train()
+        self.optimizer.zero_grad()
+        x_batch, y_batch = x_batch.to(self.device), y_batch.to(self.device)
+        outputs = self.model(x_batch)
+        loss = self.criterion(outputs, y_batch)
+        loss.backward()
+        self.optimizer.step()
+        return loss.item()
+        # END CODE
+
+    def eval_step(self, validation_dataloader):
+        """ Perfoms an evaluation step, on the validation dataloader.
+
+        Args:
+            validation_dataloader (torch.utils.data.DataLoader): Dataloader for the validation dataset.
+
+        Returns:
+            float: Validation loss with the current model checkpoint.
+        """
+
+        # BEGIN CODE : trainer.eval_step
+
+        # ADD YOUR CODE HERE
+        self.model.eval()
+        total_loss = 0.0
+        with torch.no_grad():
+            for x_batch, y_batch in validation_dataloader:
+                x_batch, y_batch = x_batch.to(self.device), y_batch.to(self.device)
+                outputs = self.model(x_batch)
+                loss = self.criterion(outputs, y_batch)
+                total_loss += loss.item() * len(x_batch)
+        return total_loss / len(validation_dataloader.dataset)
+        # END CODE
+
+    def train(self, train_dataset, validation_dataset=None,
+              num_epochs=10, batch_size=8, shuffle=True,
+              save_steps=100, eval_steps=100, collate_fn=None):
+        """ Handles the training loop for the model.
+
+        Args:
+            train_dataset (torch.utils.data.Dataset): Dataset to train on.
+            validation_dataset (torch.utils.data.Dataset, optional): Data to validate on. Defaults to None.
+            num_epochs (int, optional): Number of epochs to train for. Defaults to 10.
+            batch_size (int, optional): Number of items to process per batch. Defaults to 8.
+            shuffle (bool, optional): Whether to shuffle the data or not. Defaults to True.
+            save_steps (int, optional): Number of steps post which a checkpoint should be saved. Defaults to 100.
+            eval_steps (int, optional): Number of steps post which the model should be evaluated. Defaults to 100.
+            collate_fn (function, optional): Function to use for collating instances to a batch.
+        """
+
+        current_checkpoint = 0
+        self.model.to(self.device)
+        self.model.train()
+
+        with tqdm.tqdm(total = math.ceil(len(train_dataset) / batch_size) * num_epochs) as pbar:
+            for epoch in range(num_epochs):
+                train_dataloader      = self.make_dataloader(train_dataset, shuffle, batch_size, collate_fn)
+                if validation_dataset is not None:
+                    validation_dataloader = self.make_dataloader(validation_dataset, shuffle, batch_size, collate_fn)
+
+                for batch, (x_batch, y_batch) in enumerate(train_dataloader):
+                    pbar.set_description(f"Epoch {epoch+1} / {num_epochs}")
+
+                    # If we are resuming training, skip this iteration
+                    if current_checkpoint < self.last_checkpoint:
+                        current_checkpoint += 1
+                        pbar.update()
+                        continue
+
+                    # Do a step of training
+                    loss = self.train_step(x_batch, y_batch)
+                    self.loss_history['train'].append(loss)
+                    pbar.set_postfix({ 'batch': batch+1, 'loss': loss })
+
+                    current_checkpoint += 1
+                    pbar.update()
+
+                    # Evaluate after every eval_steps
+                    if (current_checkpoint) % eval_steps == 0:
+                        if validation_dataset is not None:
+                            val_loss = self.eval_step(validation_dataloader)
+                            self.loss_history['valid'].append(val_loss)
+                        else:
+                            val_loss = None
+
+                        print('[>]', f"epoch #{epoch+1:{len(str(num_epochs))}},",
+                              f"batch #{batch+1:{len(str(len(train_dataloader)))}}:",
+                              "loss:", f"{loss:.8f}", '|', "val_loss:", f"{val_loss:.8f}")
+
+                    # Save after every save_steps
+                    if (current_checkpoint) % save_steps == 0:
+                        self.save(current_checkpoint, { 'loss': loss, 'checkpoint': current_checkpoint })
+
+                    # free unused resources
+                    sync_vram()
+
+            self.save(current_checkpoint)
+
+    def resume(self):
+        """ Resumes training session from the most recent checkpoint. """
+
+        if checkpoints := os.listdir(self.directory):
+            self.last_checkpoint = max(map(lambda x: int(x[11:]), filter(lambda x: 'checkpoint-' in x, checkpoints)))
+            checkpoint_dir = os.path.join(self.directory, f"checkpoint-{self.last_checkpoint}")
+            self.model.load_state_dict(torch.load(
+                os.path.join(checkpoint_dir, "model.pt"),
+                map_location=self.device
+            ))
+            self.model.to(self.device)
+            self.optimizer.load_state_dict(torch.load(
+                os.path.join(checkpoint_dir, "optimizer.pt"),
+                map_location=self.device
+            ))
+            with open(os.path.join(checkpoint_dir, "loss.json"), 'r', encoding='utf-8') as ifile:
+                self.loss_history = json.load(ifile)
+
+    def save(self, checkpoint=None, metadata=None):
+        """ Saves an associated model or a training checkpoint.
+
+            If a checkpoint is specified, saves a checkpoint specific directory with optimizer data
+                so that training can be resumed post that checkpoint.
+
+        Args:
+            checkpoint (int, optional): Checkpoint index. Defaults to None.
+            metadata (dict[str, any], optional): Additional metadata to save alongside a checkpoint. Defaults to None.
+        """
+
+        if checkpoint is not None:
+            checkpoint_dir = os.path.join(self.directory, f"checkpoint-{checkpoint}")
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            torch.save(self.model.state_dict(), os.path.join(checkpoint_dir, "model.pt"))
+            torch.save(self.optimizer.state_dict(), os.path.join(checkpoint_dir, "optimizer.pt"))
+            with open(os.path.join(checkpoint_dir, "loss.json"), "w+", encoding='utf-8') as ofile:
+                json.dump(self.loss_history, ofile, ensure_ascii=False, indent=2)
+            if metadata:
+                with open(os.path.join(checkpoint_dir, "metadata.json"), "w+", encoding='utf-8') as ofile:
+                    json.dump(metadata, ofile, ensure_ascii=False, indent=2)
+        else:
+            torch.save(self.model, os.path.join(self.directory, "model.pt"))
+            with open(os.path.join(self.directory, "loss.json"), "w+", encoding='utf-8') as ofile:
+                json.dump(self.loss_history, ofile, ensure_ascii=False, indent=2)
+            if metadata:
+                with open(os.path.join(self.directory, "metadata.json"), "w+", encoding='utf-8') as ofile:
+                    json.dump(metadata, ofile, ensure_ascii=False, indent=2)
+
+## ==== END EVALUATION PORTION
