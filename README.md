@@ -1,7 +1,24 @@
 # Translation-Using-Sequence-to-Sequence-Modelling
 
 Neural language models are able to successfully capture patterns across Indian names. This project extend upon that idea to learn conditional language models for the task of transliteration: converting Indian names in the English alphabet to Hindi.
-
+```
+└─── Translation-Using-Sequence-to-Sequence-Modelling
+     ├─── main.py
+     ├─── src-tokenizer
+     │    └─── tokenizer.pkl
+     ├─── tgt-tokenizer
+     │    └─── tokenizer.pkl
+     ├─── rnn.enc-dec
+     │    ├─── model.pt
+     │    ├─── loss.json
+     │    ├─── outputs.csv
+     │    └─── metadata.json
+     └─── rnn.enc-dec.attn
+          ├─── model.pt
+          ├─── loss.json
+          ├─── outputs.csv
+          └─── metadata.json
+```
 # Tokenization
 We first prepare tokenization strategy for feeding name pairs as a sequence to different models. For English this could be as simple as using individual characters as tokens, but Hindi has accents (मात्राएँ), a larger set of vowels (स्वर), consonants (व्यंजन), and additional composition rules (half-letters, etc.), so such a simple strategy may not be effective.
 
